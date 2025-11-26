@@ -5,14 +5,30 @@ from django.views.decorators.csrf import csrf_exempt
 from .models import User
 from .serializers import UserSerializer
 import json
-import secrets
+import jwt
+import datetime
+from django.conf import settings
 from django.contrib.auth.hashers import make_password, check_password
 
 # Create your views here.
 
 def hello(req):
-    return JsonResponse({"msg":"welcome to django"})
+    return JsonResponse({"msg": "welcome to django"})
 
+
+# Helper: create JWT
+def create_jwt(user):
+    payload = {
+        "user_id": user.id,
+        "email": user.email,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(days=1)
+    }
+
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
+    return token
+
+
+# ---------------- REGISTER ----------------
 @csrf_exempt
 def users_list(request):
     if request.method == "GET":
@@ -26,52 +42,49 @@ def users_list(request):
         # 1) Hash password
         hashed_password = make_password(data["password"])
 
-        # 2) Create user with hashed password
+        # 2) Create user
         user = User.objects.create(
             name=data["name"],
             email=data["email"],
             password=hashed_password
         )
 
-        # 3) Generate token
-        token = secrets.token_hex(32)
-        user.auth_token = token
-        user.save()
+        # 3) Create JWT
+        token = create_jwt(user)
 
         serializer = UserSerializer(user)
 
-        # 4) Set cookie
+        # 4) Return response + cookie
         response = JsonResponse({
             "message": "Registration successful",
             "user": serializer.data,
-            "token": token  # optional for testing
+            "token": token   # for debugging
         }, status=201)
 
         response.set_cookie(
-            key="auth_token",
+            key="access_token",
             value=token,
             httponly=True,
             samesite="Lax",
-            max_age=60 * 60 * 24  # 1 day
+            max_age=60 * 60 * 24
         )
 
         return response
 
 
+# ---------------- GET / UPDATE / DELETE USER ----------------
 @csrf_exempt
-def user_details(request,id):
-     try:
-          user=User.objects.get(id=id)
-     except User.DoesNotExist:
-          return JsonResponse({"error":"User not found"},status=404)
-     
-     #get single user
-     if request.method=="GET":
-          serializer=UserSerializer(user)
-          return JsonResponse(serializer.data)
-     
-     # UPDATE USER
-     if request.method == "PUT":
+def user_details(request, id):
+    try:
+        user = User.objects.get(id=id)
+    except User.DoesNotExist:
+        return JsonResponse({"error": "User not found"}, status=404)
+
+    if request.method == "GET":
+        serializer = UserSerializer(user)
+        return JsonResponse(serializer.data)
+
+    if request.method == "PUT":
         data = json.loads(request.body.decode("utf-8"))
         serializer = UserSerializer(user, data=data, partial=True)
 
@@ -80,11 +93,13 @@ def user_details(request,id):
             return JsonResponse(serializer.data)
 
         return JsonResponse(serializer.errors, status=400)
-     # DELETE USER
-     if request.method == "DELETE":
+
+    if request.method == "DELETE":
         user.delete()
         return JsonResponse({"message": "User deleted"})
-     
+
+
+# ---------------- LOGIN ----------------
 @csrf_exempt
 def login(request):
     if request.method == "POST":
@@ -98,32 +113,25 @@ def login(request):
         except User.DoesNotExist:
             return JsonResponse({"error": "Invalid email"}, status=400)
 
-        # 2) Check password hash
+        # 2) Validate password
         if not check_password(password, user.password):
             return JsonResponse({"error": "Invalid password"}, status=400)
 
-        # 3) Generate new token
-        token = secrets.token_hex(32)
-        user.auth_token = token
-        user.save()
+        # 3) Create JWT
+        token = create_jwt(user)
 
-        # 4) Return response with cookie
+        # 4) Send token in cookie
         response = JsonResponse({
             "message": "Login successful",
-            "token": token  # optional for debugging
+            "token": token
         })
 
         response.set_cookie(
-            key="auth_token",
+            key="access_token",
             value=token,
             httponly=True,
             samesite="Lax",
-            max_age=60 *2  # 2min
+            max_age=60 * 60  # 1 hour
         )
 
         return response
-
-
-        
-          
-    
